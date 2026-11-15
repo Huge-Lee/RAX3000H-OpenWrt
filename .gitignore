@@ -1,0 +1,8 @@
+/deps/
+/dist/
+/.local/
+/backup/
+/logs/
+__pycache__/
+*.py[cod]
+.venv/

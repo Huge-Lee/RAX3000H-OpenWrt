@@ -1,0 +1,102 @@
+diff --git a/modules/luci-mod-network/htdocs/luci-static/resources/view/network/wireless.js b/modules/luci-mod-network/htdocs/luci-static/resources/view/network/wireless.js
+index 7ad2e0a..bb22592 100644
+--- a/modules/luci-mod-network/htdocs/luci-static/resources/view/network/wireless.js
++++ b/modules/luci-mod-network/htdocs/luci-static/resources/view/network/wireless.js
+@@ -10,6 +10,7 @@
+ 'require network';
+ 'require firewall';
+ 'require tools.widgets as widgets';
++'require tools.rax3000h as rax3000h';
+ 'require uqr';
+ 
+ const isReadonlyView = !L.hasViewPermission();
+@@ -192,10 +193,10 @@ function render_modal_status(node, radioNet) {
+ 		_('BSSID'),      is_assoc ? bssid : null,
+ 		_('Encryption'), is_assoc ? radioNet.getActiveEncryption() ?? _('None') : null,
+ 		_('Channel'),    is_assoc ? `${radioNet.getChannel()} (${radioNet.getFrequency() ?? 0} ${_('GHz')})` : null,
+-		_('Tx-Power'),   is_assoc ? `${radioNet.getTXPower()} ${_('dBm')}` : null,
+-		_('Signal'),     is_assoc ? `${radioNet.getSignal()} ${_('dBm')}` : null,
+-		_('Noise'),      (is_assoc && noise != null) ? `${noise} ${_('dBm')}` : null,
+-		_('Bitrate'),    is_assoc ? `${radioNet.getBitRate() ?? 0} ${_('Mbit/s')}` : null,
++		_('Tx-Power'),   (is_assoc && radioNet.getTXPower() != null) ? `${radioNet.getTXPower()} ${_('dBm')}` : null,
++		_('Signal'),     (is_assoc && radioNet.getSignal()) ? `${radioNet.getSignal()} ${_('dBm')}` : null,
++		_('Noise'),      (is_assoc && noise) ? `${noise} ${_('dBm')}` : null,
++		_('Bitrate'),    (is_assoc && radioNet.getBitRate() != null) ? `${radioNet.getBitRate()} ${_('Mbit/s')}` : null,
+ 		_('Country'),    is_assoc ? radioNet.getCountryCode() : null
+ 	], [ ' | ', E('br'), E('br'), E('br'), E('br'), E('br'), ' | ', E('br'), ' | ' ]);
+ 
+@@ -206,6 +207,8 @@ function render_modal_status(node, radioNet) {
+ }
+ 
+ function format_wifirate(rate) {
++	if (!rate || !rate.rate) return '?';
++	if (!rate.mhz) return `${rate.rate / 1000}\xa0${_('Mbit/s')}`;
+ 	let s = `${rate.rate / 1000}\xa0${_('Mbit/s')}, ${rate.mhz}\xa0${_('MHz')}`;
+ 
+ 	if (rate?.ht || rate?.vht) s += [
+@@ -703,7 +706,7 @@ return view.extend({
+ 			const badge = row.querySelector('[data-name="_badge"] > div');
+ 			const stat = row.querySelector('[data-name="_stat"]');
+ 			const btns = row.querySelectorAll('.cbi-section-actions button');
+-			const busy = btns[0].classList.contains('spinning') || btns[1].classList.contains('spinning') || btns[2].classList.contains('spinning');
++			const busy = Array.from(btns).some(btn => btn.classList.contains('spinning'));
+ 
+ 			if (radioDev) {
+ 				dom.content(badge, render_radio_badge(radioDev));
+@@ -717,9 +720,9 @@ return view.extend({
+ 			if (stat.hasAttribute('restart'))
+ 				dom.content(stat, E('em', _('Device is restarting…')));
+ 
+-			btns[0].disabled = isReadonlyView || busy;
+-			btns[1].disabled = (isReadonlyView && radioDev) || busy;
+-			btns[2].disabled = isReadonlyView || busy;
++			btns.forEach(btn => {
++				btn.disabled = (isReadonlyView && (!radioDev || btn.dataset.action != 'scan')) || busy;
++			});
+ 		});
+ 
+ 		const table = document.querySelector('#wifi_assoclist_table');
+@@ -760,7 +763,7 @@ return view.extend({
+ 				]),
+ 				bss.mac,
+ 				hint,
+-				render_signal_badge(Math.min((bss.signal + 110) / 70 * 100, 100), bss.signal, bss.noise),
++				bss.signal ? render_signal_badge(Math.min((bss.signal + 110) / 70 * 100, 100), bss.signal, bss.noise) : '?',
+ 				E('span', {}, [
+ 					E('span', format_wifirate(bss.rx)),
+ 					E('br'),
+@@ -952,11 +955,12 @@ return view.extend({
+ 						'title': _('Restart radio interface'),
+ 						'click': ui.createHandlerFn(this, radio_restart, section_id)
+ 					}, _('Restart')),
+-					E('button', {
++					...(uci.get('wireless', inst.getName(), 'type') == 'rax3000h' ? [] : [ E('button', {
+ 						'class': 'cbi-button cbi-button-action important',
+ 						'title': _('Find and join network'),
++						'data-action': 'scan',
+ 						'click': ui.createHandlerFn(this, 'handleScan', inst)
+-					}, _('Scan')),
++					}, _('Scan')) ]),
+ 					E('button', {
+ 						'class': 'cbi-button cbi-button-add',
+ 						'title': _('Provide new network'),
+@@ -993,6 +997,10 @@ return view.extend({
+ 		s.addModalOptions = function(s) {
+ 			return network.getWifiNetwork(s.section).then(function(radioNet) {
+ 				const hwtype = uci.get('wireless', radioNet.getWifiDeviceName(), 'type');
++				if (hwtype == 'rax3000h')
++					return rax3000h.render(s, radioNet, render_modal_status,
++						ui.createHandlerFn(s, network_updown, s.section, s.map));
++
+ 				const have_mesh = L.hasSystemFeature('hostapd', 'mesh') || L.hasSystemFeature('wpasupplicant', 'mesh');
+ 				let o, ss;
+ 
+@@ -2576,6 +2584,8 @@ return view.extend({
+ 			uci.set('wireless', section_id, 'mode', 'ap');
+ 			uci.set('wireless', section_id, 'ssid', 'OpenWrt');
+ 			uci.set('wireless', section_id, 'encryption', 'none');
++			if (uci.get('wireless', radioDev.getName(), 'type') == 'rax3000h')
++				uci.set('wireless', section_id, 'network', 'lan');
+ 
+ 			m.addedSection = section_id;
+ 			return this.renderMoreOptionsModal(section_id);

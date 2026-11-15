@@ -1,0 +1,18 @@
+diff --git a/package/network/config/netifd/files/etc/init.d/network b/package/network/config/netifd/files/etc/init.d/network
+--- a/package/network/config/netifd/files/etc/init.d/network
++++ b/package/network/config/netifd/files/etc/init.d/network
+@@ -35,6 +35,14 @@
+ 
+ stop_service() {
+ 	[ -x /sbin/wifi ] && /sbin/wifi down
++	# Wireless teardown is asynchronous and serialized in netifd 25.
++	# Finish both vendor hostapd instances before procd kills the daemon.
++	local retry=0
++	while [ "$retry" -lt 20 ] &&
++		ubus call network.wireless status | jsonfilter -e '@.*.pending' | grep -q true; do
++		sleep 1
++		retry=$((retry + 1))
++	done
+ 	ifdown -a
+ 	sleep 1
+ }

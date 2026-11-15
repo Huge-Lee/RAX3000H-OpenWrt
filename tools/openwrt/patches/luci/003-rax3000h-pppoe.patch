@@ -1,0 +1,20 @@
+--- a/protocols/luci-proto-ppp/htdocs/luci-static/resources/protocol/pppoe.js
++++ b/protocols/luci-proto-ppp/htdocs/luci-static/resources/protocol/pppoe.js
+@@ -37,7 +37,7 @@
+ 	},
+ 
+ 	renderFormOptions: function(s) {
+-		var dev = this.getL3Device() || this.getDevice(), o;
++		var o;
+ 
+ 		s.taboption('general', form.Value, 'username', _('PAP/CHAP username'));
+ 
+@@ -94,7 +94,7 @@
+ 		o.datatype    = 'uinteger';
+ 
+ 		o = s.taboption('advanced', form.Value, 'mtu', _('Override MTU'));
+-		o.placeholder = dev ? (dev.getMTU() || '1500') : '1500';
++		o.placeholder = '1492';
+ 		o.datatype    = 'max(9200)';
+ 	}
+ });

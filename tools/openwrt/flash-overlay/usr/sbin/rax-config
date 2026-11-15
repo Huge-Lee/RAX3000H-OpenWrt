@@ -1,0 +1,99 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Canonical /etc paths in archives; apply only before persistent bind mounts.
+set -eu
+store=/plugins/openwrt
+pending=$store/.config-pending
+die() { echo "$*" >&2; exit 1; }
+lock() {
+    [ ! -e /tmp/rax-firmware.busy ] || die 'Firmware operation is running'
+    mkdir /tmp/rax-config.lock || die 'Configuration operation is running'
+    trap 'rm -rf /tmp/rax-config.lock' EXIT
+    umask 077
+}
+mounted() {
+    grep -q ' /plugins jffs2 ' /proc/mounts || die 'Persistent storage is not mounted'
+    grep -q ' /etc/config ' /proc/mounts || die 'Persistent configuration is not mounted'
+}
+snapshot() {
+    root=$1
+    mkdir -p "$root/etc"
+    printf 'rax3000h-config-v1\n' >"$root/etc/rax-backup-format"
+    for name in config dropbear crontabs; do
+        cp -aL "/etc/$name" "$root/etc/$name"
+    done
+    for name in passwd group shadow rc.local sysupgrade.conf; do
+        [ ! -f "/etc/$name" ] || cp -pL "/etc/$name" "$root/etc/$name"
+    done
+    [ ! -d "$store/services" ] || cp -aL "$store/services" "$root/etc/rax-services"
+}
+case "${1:-}" in
+    backup)
+        lock; mounted
+        snapshot /tmp/rax-config.lock/root
+        tar -czf /tmp/rax-config.lock/backup.tar.gz -C /tmp/rax-config.lock/root etc
+        rax-config-check /tmp/rax-config.lock/backup.tar.gz >/dev/null
+        # stdout is a standard OpenWrt-style configuration tar.gz, not assets.
+        cat /tmp/rax-config.lock/backup.tar.gz
+        ;;
+    check)
+        rax-config-check "${2:?archive required}"
+        ;;
+    restore|reset)
+        action=$1
+        lock; mounted
+        [ ! -e "$pending" ] || die 'A configuration change is already pending reboot'
+        mkdir /tmp/rax-config.lock/next
+        if [ "$action" = restore ]; then
+            archive=${2:?archive required}
+            rax-config-check "$archive" >/dev/null
+            tar -xozf "$archive" -C /tmp/rax-config.lock/next
+        fi
+        free=$(df -Pk /plugins | tail -n 1 | awk '{print $4}')
+        need=$(du -sk /tmp/rax-config.lock/next | awk '{print $1}')
+        [ "$free" -ge "$((need + 1024))" ] || die 'Insufficient configuration storage'
+        # Publish the complete staged operation in one rename on JFFS2.
+        rm -rf "$store/.config-new"
+        mkdir -m 700 "$store/.config-new"
+        cp -a /tmp/rax-config.lock/next/. "$store/.config-new/"
+        printf '%s\n' "$action" >"$store/.config-new/action"
+        mv "$store/.config-new" "$pending"
+        sync
+        echo 'Configuration staged; reboot to apply'
+        ;;
+    apply-pending)
+        # preinit only: /etc still holds fresh firmware defaults.
+        [ -d "$pending" ] || exit 0
+        ! grep -q ' /etc/config ' /proc/mounts || die 'Cannot apply after configuration mounts'
+        action=$(cat "$pending/action")
+        case "$action" in reset|restore) ;; *) die 'Unknown pending configuration operation';; esac
+        # Explicit user-state list. Never remove vendor/, factory or slots.
+        for name in config dropbear crontabs accounts uci-defaults services rc.local urandom.seed sysupgrade.conf; do
+            rm -rf "$store/$name"
+        done
+        if [ "$action" = restore ]; then
+            mkdir -p "$store/accounts"
+            for name in config dropbear crontabs; do
+                mkdir -p "$store/$name"
+                [ ! -d "/etc/$name" ] || cp -a "/etc/$name/." "$store/$name/"
+                [ ! -d "$pending/etc/$name" ] || cp -a "$pending/etc/$name/." "$store/$name/"
+            done
+            for name in passwd group shadow; do
+                source=/etc/$name
+                [ ! -f "$pending/etc/$name" ] || source=$pending/etc/$name
+                cp -p "$source" "$store/accounts/$name"
+            done
+            for name in rc.local sysupgrade.conf; do
+                [ ! -f "$pending/etc/$name" ] || cp -p "$pending/etc/$name" "$store/$name"
+            done
+            [ ! -d "$pending/etc/rax-services" ] || cp -a "$pending/etc/rax-services" "$store/services"
+            chmod 755 "$store/accounts"
+            chmod 644 "$store/accounts/passwd" "$store/accounts/group"
+            chmod 600 "$store/accounts/shadow"
+            chmod 700 "$store/dropbear"
+        fi
+        rm -rf "$pending"
+        sync
+        ;;
+    *) die 'Usage: rax-config backup|check ARCHIVE|restore ARCHIVE|reset|apply-pending';;
+esac

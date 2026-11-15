@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+# RAX3000H RGB indicator; active-low pins confirmed by the vendor board script.
+START=97
+USE_PROCD=1
+
+set_channel() {
+    local pin="$1" level="$2" base=/sys/class/gpio
+    [ -d "$base/gpio$pin" ] || echo "$pin" >"$base/export" || return 1
+    # Set direction and initial value together, avoiding a light pulse.
+    case "$level" in
+        1) echo high >"$base/gpio$pin/direction";;
+        0) echo low >"$base/gpio$pin/direction";;
+    esac
+}
+
+start_service() {
+    local mode
+    # Other vendor boards use different pins, including pins used for PCIe.
+    [ "$(tr -d '\000' </sys/firmware/devicetree/base/compatible)" = hsan-luofu ] || return 1
+    mode=$(uci -q get system.led_control.mode)
+    case "$mode" in ''|default|off) ;; *) return 1;; esac
+    # Red=24, blue=25, green=1. PCIe owns pins 20/21/23; never touch them.
+    set_channel 24 1 || return 1
+    set_channel 25 1 || return 1
+    if [ "$mode" = off ]; then set_channel 1 1; else set_channel 1 0; fi
+}
+
+reload_service() { start_service; }
+service_triggers() { procd_add_reload_trigger system; }

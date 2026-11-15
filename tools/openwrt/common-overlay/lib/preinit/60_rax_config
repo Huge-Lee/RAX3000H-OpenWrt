@@ -1,0 +1,5 @@
+rax_mount_config() {
+	/usr/sbin/rax-config-mount || echo 'RAX_CONFIG_MOUNT_FAILED: using RAM defaults' >/dev/console
+}
+
+boot_hook_add preinit_main rax_mount_config

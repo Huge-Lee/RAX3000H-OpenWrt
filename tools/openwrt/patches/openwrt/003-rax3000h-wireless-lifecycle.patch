@@ -1,0 +1,59 @@
+diff --git a/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc b/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc
+--- a/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc
++++ b/package/network/config/wifi-scripts/files/lib/netifd/wireless.uc
+@@ -353,7 +353,13 @@
+ 
+ function config_start()
+ {
+-	for (let name, dev in wireless.devices)
++	// The vendor radios share initialization; finish 5 GHz before 2.4 GHz.
++	let devices = values(wireless.devices);
++	function priority(dev) {
++		return dev.data.config.type == "rax3000h" && dev.data.config.band == "5g" ? 0 : 1;
++	}
++	sort(devices, (a, b) => priority(a) - priority(b));
++	for (let dev in devices)
+ 		if (dev.autostart)
+ 			dev.start();
+ 
+diff --git a/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc b/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc
+--- a/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc
++++ b/package/network/config/wifi-scripts/files/lib/netifd/wireless-device.uc
+@@ -232,7 +232,7 @@
+ 	if (!wdev_script_task)
+ 		return run_handler_cb(wdev, cb);
+ 
+-	wdev_script_timeout = uloop.timer(DEFAULT_SCRIPT_TIMEOUT,
++	wdev_script_timeout = uloop.timer(wdev.data.config.type == "rax3000h" ? 180000 : DEFAULT_SCRIPT_TIMEOUT,
+ 		() => run_handler_timeout(wdev, cb)
+ 	);
+ }
+@@ -302,8 +302,14 @@
+ 		return;
+ 
+ 	this.dbg("setup, state=" + this.state);
+-	if (!this.autostart || this.retry_setup_failed)
+-		return;
++	if (!this.autostart || this.retry_setup_failed || this.data.config.disabled)
++		return;
++
++	// This hostapd backend must tear down the old AP before replacing it.
++	if (this.state == "up" && this.data.config.type == "rax3000h") {
++		this.teardown();
++		return;
++	}
+ 
+ 	wdev_proc_reset(this);
+ 	delete this.config_change;
+@@ -444,7 +450,10 @@
+ 		return;
+ 
+ 	wdev_config_init(this);
+-	this.setup();
++	if (this.data.config.disabled)
++		this.teardown();
++	else
++		this.setup();
+ }
+ 
+ function wdev_mark_up(wdev)

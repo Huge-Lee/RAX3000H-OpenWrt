@@ -1,0 +1,4 @@
+#!/bin/sh
+# netifd has finished clearing pre-existing bridges when loopback comes up.
+[ "$ACTION" = ifup ] && [ "$INTERFACE" = loopback ] || exit 0
+/usr/bin/rax-network wired

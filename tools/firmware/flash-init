@@ -1,0 +1,29 @@
+#!/bin/sh
+# The vendor initramfs already mounted the flash root and loaded platform/UBI.
+# Only /etc becomes a small RAM filesystem; binaries execute from SquashFS.
+set -e
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t tmpfs -o mode=755,size=512k tmpfs /dev
+mknod /dev/console c 5 1
+mknod /dev/null c 1 3
+mknod /dev/watchdog c 10 130
+exec </dev/console >/dev/console 2>&1
+mkdir -p /dev/pts
+# Retain watchdog coverage and hand ownership to OpenWrt init/procd.
+killall watchdog || true
+sleep 1
+exec 3>/dev/watchdog
+printf X >&3
+export WDTFD=3
+mount -t tmpfs -o mode=755,size=16m tmpfs /tmp
+cp -a /etc /tmp/etc-root
+mount -t tmpfs -o mode=755,size=4m etc-ram /etc
+cp -a /tmp/etc-root/. /etc/
+rm -rf /tmp/etc-root
+mount -t jffs2 -o noatime,nodev,nosuid mtd:plugins /plugins
+mount -t jffs2 -o ro,nodev,nosuid mtd:fac /usr/local/factory
+[ -s /plugins/openwrt/vendor/lib/hisilicon/ko/hi_flash.ko ]
+/usr/sbin/rax-wifi-assets
+echo RAX_FLASH_INIT_READY
+exec /sbin/init.procd

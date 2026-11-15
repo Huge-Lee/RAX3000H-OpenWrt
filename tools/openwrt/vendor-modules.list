@@ -1,0 +1,21 @@
+# Only modules explicitly loaded in the working OpenWrt RAM network tests.
+# Platform drivers already present before switch_root are separate.
+wired lib/hisilicon/ko/hi_kpinctrl.ko
+wired lib/modules/5.10.0/gpio-generic.ko
+wired lib/modules/5.10.0/gpio-dwapb.ko
+wired lib/hisilicon/ko/hi_kpie.ko
+wired lib/hisilicon/ko/hi_kmdio.ko
+wired lib/hisilicon/ko/hi_kphy.ko
+wired lib/hisilicon/ko/hi_kmac.ko
+wired lib/hisilicon/ko/hi_kteam.ko
+wired lib/hisilicon/ko/hi_lsw_pub.ko
+wired lib/hisilicon/ko/hi_lsw_dp.ko
+wired lib/hisilicon/ko/hi_lsw_pfe.ko
+wired lib/hisilicon/ko/hi_kcfe_pub.ko
+wired lib/hisilicon/ko/hi_kcfe_lrn.ko
+wired lib/hisilicon/ko/hi_kcfe_lrn_l4.ko
+wired lib/hisilicon/ko/hi_kcara.ko
+wifi lib/hisilicon/ko/hi_woc_wifi_rtx.ko
+wifi lib/hisilicon/ko/hi_pcie.ko
+wifi lib/hisilicon/ko/hi5622v100_plat.ko
+wifi lib/hisilicon/ko/hi5622v100_wifi.ko

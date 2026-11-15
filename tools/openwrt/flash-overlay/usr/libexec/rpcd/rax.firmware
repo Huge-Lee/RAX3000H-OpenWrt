@@ -1,0 +1,47 @@
+#!/bin/sh
+. /usr/share/libubox/jshn.sh
+case "$1" in
+    list)
+        echo '{"status":{},"write":{"slot":"","force":false},"select":{"slot":"","force":false},"progress":{}}'
+        ;;
+    call)
+        json_load "$(cat)"
+        case "$2" in
+            status)
+                state=$(rax-flash status)
+                running=$(echo "$state" | sed -n 's/^running=//p')
+                selected=$(echo "$state" | sed -n 's/^selected=//p')
+                json_init; json_add_string running "$running"; json_add_string selected "$selected"; json_dump
+                ;;
+            write|select)
+                json_get_var slot slot
+                json_get_var force force
+                case "$slot" in a|b) ;; *) exit 2;; esac
+                flag=
+                [ "$force" != 1 ] || flag=--force
+                [ ! -f /tmp/rax-firmware.busy ] || exit 1
+                [ ! -d /tmp/rax-config.lock ] || exit 1
+                [ ! -d /plugins/openwrt/.config-pending ] || exit 1
+                if [ "$2" = write ]; then
+                    [ -f /tmp/rax-upload.ubi ] || exit 1
+                    # Claim the upload before accepting the operation.
+                    mv /tmp/rax-upload.ubi /tmp/rax-write.ubi || exit 1
+                    rm -f /tmp/rax-firmware.result
+                    touch /tmp/rax-firmware.busy
+                    (rax-flash write "$slot" /tmp/rax-write.ubi $flag > /tmp/rax-firmware.log 2>&1; echo $? >/tmp/rax-firmware.result; rm -f /tmp/rax-firmware.busy /tmp/rax-write.ubi) </dev/null >/dev/null 2>&1 &
+                    echo '{"started":true}'
+                else
+                    output=$(rax-flash select "$slot" $flag 2>&1); code=$?
+                    json_init; json_add_int code "$code"; json_add_string output "$output"; json_dump
+                fi
+                ;;
+            progress)
+                json_init
+                json_add_boolean busy "$([ -f /tmp/rax-firmware.busy ] && echo 1 || echo 0)"
+                json_add_string output "$(cat /tmp/rax-firmware.log 2>/dev/null)"
+                json_add_int code "$(cat /tmp/rax-firmware.result 2>/dev/null || echo -1)"
+                json_dump
+                ;;
+        esac
+        ;;
+esac

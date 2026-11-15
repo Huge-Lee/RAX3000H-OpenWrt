@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+grep -q ' /plugins jffs2 ' /proc/mounts || mount -t jffs2 -o noatime,nodev,nosuid mtd:plugins /plugins
+mount -o remount,rw /plugins
+store=/plugins/openwrt
+mkdir -p "$store"
+chmod 755 "$store"
+if [ -e "$store/vendor" ]; then
+    free=$(df -Pk /plugins | tail -n 1 | awk '{print $4}')
+    [ "$free" -ge 1024 ] || { echo "PLUGIN_SPACE_INSUFFICIENT: ${free} KiB" >&2; exit 1; }
+    echo "Device assets already installed; free_kib=$free"
+    exit 0
+fi
+mkdir -p "$store/.vendor.new"
+trap 'rm -rf "$store/.vendor.new"' EXIT
+cp -a /tmp/vendor/. "$store/.vendor.new/" || {
+    free=$(df -Pk /plugins | tail -n 1 | awk '{print $4}')
+    [ "$free" -ge 1024 ] || echo PLUGIN_SPACE_INSUFFICIENT >&2
+    exit 1
+}
+sync
+free=$(df -Pk /plugins | tail -n 1 | awk '{print $4}')
+[ "$free" -ge 1024 ] || { echo "PLUGIN_SPACE_INSUFFICIENT: ${free} KiB; need at least 1024 KiB after assets" >&2; exit 1; }
+mv "$store/.vendor.new" "$store/vendor"
+trap - EXIT
+sync
+echo "ASSETS_READY free_kib=$free"

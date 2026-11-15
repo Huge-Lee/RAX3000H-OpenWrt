@@ -1,0 +1,10 @@
+{
+  "rax-firmware": {
+    "description": "Manage RAX3000H rootfs slots",
+    "read": { "ubus": { "rax.firmware": ["status", "progress"] } },
+    "write": {
+      "ubus": { "rax.firmware": ["write", "select"], "file": ["exec"] },
+      "file": { "/tmp/rax-upload.ubi": ["write"], "/sbin/reboot": ["exec"] }
+    }
+  }
+}

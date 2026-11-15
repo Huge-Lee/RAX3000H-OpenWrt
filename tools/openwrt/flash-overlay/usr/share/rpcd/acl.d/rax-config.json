@@ -1,0 +1,13 @@
+{
+  "rax-config": {
+    "description": "Back up, restore and reset persistent OpenWrt settings",
+    "read": { "ubus": { "rax.config": ["status"] } },
+    "write": {
+      "ubus": { "rax.config": ["backup", "check", "restore", "reset"], "file": ["read", "write"] },
+      "file": {
+        "/tmp/rax-backup.tar.gz": ["read"],
+        "/tmp/rax-config-upload.tar.gz": ["write"]
+      }
+    }
+  }
+}

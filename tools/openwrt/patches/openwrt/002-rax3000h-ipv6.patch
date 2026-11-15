@@ -1,0 +1,62 @@
+--- a/package/network/config/firewall/Makefile
++++ b/package/network/config/firewall/Makefile
+@@ -30,7 +30,7 @@
+   SECTION:=net
+   CATEGORY:=Base system
+   TITLE:=OpenWrt C Firewall
+-  DEPENDS:=+libubox +libubus +libuci +libip4tc +IPV6:libip6tc +libiptext +IPV6:libiptext6 +libxtables +kmod-ipt-core +kmod-ipt-conntrack +IPV6:kmod-nf-conntrack6 +kmod-ipt-nat
++  DEPENDS:=+libubox +libubus +libuci +libip4tc +IPV6:libip6tc +libiptext +IPV6:libiptext6 +libxtables +!TARGET_rax3000h:kmod-ipt-core +!TARGET_rax3000h:kmod-ipt-conntrack +IPV6&&!TARGET_rax3000h:kmod-nf-conntrack6 +!TARGET_rax3000h:kmod-ipt-nat
+   PROVIDES:=uci-firewall
+   CONFLICTS:=firewall4
+ endef
+--- a/package/network/utils/iptables/Makefile
++++ b/package/network/utils/iptables/Makefile
+@@ -27,9 +27,14 @@
+ 
+ include $(INCLUDE_DIR)/package.mk
+ ifeq ($(DUMP),)
++ifeq ($(CONFIG_TARGET_rax3000h),y)
++  # Legacy userspace extensions; netfilter itself comes from the vendor kernel.
++  IPT_BUILTIN:=xt_standard ipt_icmp ip6t_icmp6 xt_tcp xt_udp xt_conntrack xt_limit xt_mac xt_multiport xt_comment xt_mark xt_MARK xt_state xt_CT xt_NAT ipt_REJECT ip6t_REJECT xt_LOG xt_TCPMSS xt_hl xt_HL xt_addrtype xt_owner xt_iprange xt_time xt_connmark xt_CONNMARK xt_CHECKSUM
++else
+   -include $(LINUX_DIR)/.config
+   include $(INCLUDE_DIR)/netfilter.mk
+   STAMP_CONFIGURED:=$(strip $(STAMP_CONFIGURED))_$(shell grep 'NETFILTER' $(LINUX_DIR)/.config | $(MKHASH) md5)
++endif
+ endif
+ 
+ 
+@@ -48,7 +53,7 @@
+ define Package/xtables-legacy
+ $(call Package/iptables/Default)
+   TITLE:=IP firewall administration tool
+-  DEPENDS+= +kmod-ipt-core +libip4tc +IPV6:libip6tc +libiptext +IPV6:libiptext6 +libxtables
++  DEPENDS+= +!TARGET_rax3000h:kmod-ipt-core +libip4tc +IPV6:libip6tc +libiptext +IPV6:libiptext6 +libxtables
+ endef
+ 
+ define Package/iptables-zz-legacy
+@@ -457,7 +462,7 @@
+ 
+ define Package/ip6tables-zz-legacy
+ $(call Package/iptables/Default)
+-  DEPENDS:=@IPV6 +kmod-ip6tables +xtables-legacy
++  DEPENDS:=@IPV6 +!TARGET_rax3000h:kmod-ip6tables +xtables-legacy
+   CATEGORY:=Network
+   TITLE:=IPv6 firewall administration tool
+   PROVIDES:=ip6tables ip6tables-legacy
+@@ -576,13 +581,13 @@
+ TARGET_CFLAGS += \
+ 	-I$(PKG_BUILD_DIR)/include \
+ 	-I$(LINUX_DIR)/user_headers/include \
+-	-DNO_LEGACY
++	$(if $(CONFIG_TARGET_rax3000h),,-DNO_LEGACY)
+ 
+ CONFIGURE_ARGS += \
+ 	--enable-shared \
+ 	--enable-static \
+ 	--enable-devel \
+-	--with-kernel="$(LINUX_DIR)/user_headers" \
++	$(if $(CONFIG_TARGET_rax3000h),--without-kernel --disable-nftables,--with-kernel="$(LINUX_DIR)/user_headers") \
+ 	--with-xtlibdir=/usr/lib/iptables \
+ 	--with-xt-lock-name=/var/run/xtables.lock \
+ 	$(if $(CONFIG_IPTABLES_CONNLABEL),,--disable-connlabel) \

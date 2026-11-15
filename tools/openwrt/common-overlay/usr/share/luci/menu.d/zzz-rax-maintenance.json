@@ -1,0 +1,15 @@
+{
+  "admin/system/flash": {
+    "title": "备份、恢复与升级",
+    "order": 70,
+    "action": { "type": "view", "path": "system/rax-firmware" },
+    "depends": {
+      "acl": ["rax-firmware", "rax-config"],
+      "fs": { "/usr/sbin/rax-config": "executable" }
+    }
+  },
+  "admin/system/rax-firmware": {
+    "action": { "type": "alias", "path": "admin/system/flash" },
+    "depends": { "acl": ["rax-firmware", "rax-config"] }
+  }
+}

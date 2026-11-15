@@ -1,0 +1,456 @@
+--- a/iptables.c
++++ b/iptables.c
+@@ -165,6 +165,9 @@
+ 	int i;
+ 	struct fw3_ipt_handle *h;
+ 
++	if (family == FW3_FAMILY_V6 && table == FW3_TABLE_NAT)
++		return NULL;
++
+ 	h = fw3_alloc(sizeof(*h));
+ 
+ 	xtables_init();
+@@ -396,84 +399,26 @@
+ 		iptc_delete_chain(chain, h->handle);
+ }
+ 
+-static bool
+-has_rule_tag(const void *base, unsigned int start, unsigned int end)
+-{
+-	unsigned int i;
+-	const struct xt_entry_match *em;
+-
+-	for (i = start; i < end; i += em->u.match_size)
+-	{
+-		em = base + i;
+-
+-		if (strcmp(em->u.user.name, "comment"))
+-			continue;
+-
+-		if (!memcmp(em->data, "!fw3", 4))
+-			return true;
+-	}
+-
+-	return false;
+-}
+-
+ void
+ fw3_ipt_delete_id_rules(struct fw3_ipt_handle *h, const char *chain)
+ {
+-	unsigned int num;
+-	const struct ipt_entry *e;
+-	bool found;
+-
+-#ifndef DISABLE_IPV6
+-	if (h->family == FW3_FAMILY_V6)
+-	{
+-		if (!ip6tc_is_chain(chain, h->handle))
+-			return;
+-
+-		do {
+-			found = false;
+-
+-			const struct ip6t_entry *e6;
+-			for (num = 0, e6 = ip6tc_first_rule(chain, h->handle);
+-				 e6 != NULL;
+-				 num++, e6 = ip6tc_next_rule(e6, h->handle))
+-			{
+-				if (has_rule_tag(e6, sizeof(*e6), e6->target_offset))
+-				{
+-					if (fw3_pr_debug)
+-						debug(h, "-D %s %u\n", chain, num + 1);
+-
+-					ip6tc_delete_num_entry(chain, num, h->handle);
+-					found = true;
+-					break;
+-				}
+-			}
+-		} while (found);
+-	}
+-	else
+-#endif
+-	{
+-		if (!iptc_is_chain(chain, h->handle))
+-			return;
+-
+-		do {
+-			found = false;
+-
+-			for (num = 0, e = iptc_first_rule(chain, h->handle);
+-				 e != NULL;
+-				 num++, e = iptc_next_rule(e, h->handle))
+-			{
+-				if (has_rule_tag(e, sizeof(*e), e->target_offset))
+-				{
+-					if (fw3_pr_debug)
+-						debug(h, "-D %s %u\n", chain, num + 1);
+-
+-					iptc_delete_num_entry(chain, num, h->handle);
+-					found = true;
+-					break;
+-				}
+-			}
+-		} while (found);
+-	}
++ char owned[32];
++ snprintf(owned, sizeof(owned), "rax_%s", chain);
++#ifndef DISABLE_IPV6
++ if (h->family == FW3_FAMILY_V6) {
++  if (!ip6tc_is_chain(owned, h->handle)) return;
++  ip6tc_flush_entries(owned, h->handle);
++  delete_rules(h, owned);
++  ip6tc_delete_chain(owned, h->handle);
++ } else
++#endif
++ {
++  if (!iptc_is_chain(owned, h->handle)) return;
++  iptc_flush_entries(owned, h->handle);
++  delete_rules(h, owned);
++  iptc_delete_chain(owned, h->handle);
++ }
++
+ }
+ 
+ 
+@@ -605,10 +550,13 @@
+ 	}
+ }
+ 
+-void
++bool
+ fw3_ipt_commit(struct fw3_ipt_handle *h)
+ {
+ 	int rv;
++
++	if (h->error)
++		return false;
+ 
+ #ifndef DISABLE_IPV6
+ 	if (h->family == FW3_FAMILY_V6)
+@@ -624,6 +572,7 @@
+ 		if (!rv)
+ 			warn("iptc_commit(): %s", iptc_strerror(errno));
+ 	}
++	return rv != 0;
+ }
+ 
+ void
+@@ -1262,18 +1211,9 @@
+ void
+ fw3_ipt_rule_comment(struct fw3_ipt_rule *r, const char *fmt, ...)
+ {
+-	va_list ap;
+-	char buf[256];
+-
+-	if (!fmt || !*fmt)
+-		return;
+-
+-	va_start(ap, fmt);
+-	vsnprintf(buf, sizeof(buf), fmt, ap);
+-	va_end(ap);
+-
+-	fw3_ipt_rule_addarg(r, false, "-m", "comment");
+-	fw3_ipt_rule_addarg(r, false, "--comment", buf);
++	/* xt_comment is absent; owned chains identify generated rules. */
++	(void)r;
++	(void)fmt;
+ }
+ 
+ void
+@@ -1640,34 +1580,6 @@
+ 	}
+ }
+ 
+-static void
+-set_rule_tag(struct fw3_ipt_rule *r)
+-{
+-	int i;
+-	char *p, **tmp;
+-	const char *tag = "!fw3";
+-
+-	for (i = 0; i < r->argc; i++)
+-		if (!strcmp(r->argv[i], "--comment") && (i + 1) < r->argc)
+-			if (asprintf(&p, "%s: %s", tag, r->argv[i + 1]) > 0)
+-			{
+-				free(r->argv[i + 1]);
+-				r->argv[i + 1] = p;
+-				return;
+-			}
+-
+-	tmp = realloc(r->argv, (r->argc + 4) * sizeof(*r->argv));
+-
+-	if (tmp)
+-	{
+-		r->argv = tmp;
+-		r->argv[r->argc++] = fw3_strdup("-m");
+-		r->argv[r->argc++] = fw3_strdup("comment");
+-		r->argv[r->argc++] = fw3_strdup("--comment");
+-		r->argv[r->argc++] = fw3_strdup(tag);
+-	}
+-}
+-
+ void
+ __fw3_ipt_rule_append(struct fw3_ipt_rule *r, bool repl, const char *fmt, ...)
+ {
+@@ -1693,6 +1605,23 @@
+ 	vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+ 	va_end(ap);
+ 
++ if (buf[0] == '@') {
++  memmove(buf, buf+1, strlen(buf));
++ } else if (!strcmp(buf,"INPUT") || !strcmp(buf,"OUTPUT") ||
++            !strcmp(buf,"FORWARD") || !strcmp(buf,"PREROUTING") ||
++            !strcmp(buf,"POSTROUTING")) {
++  char owned[32];
++  snprintf(owned,sizeof(owned),"rax_%s",buf);
++  if (!is_chain(r->h,owned)) {
++   struct fw3_ipt_rule *jump;
++   fw3_ipt_create_chain(r->h,false,owned);
++   jump=fw3_ipt_rule_new(r->h);
++   fw3_ipt_rule_target(jump,"%s",owned);
++   fw3_ipt_rule_append(jump,"@%s",buf);
++  }
++  snprintf(buf,sizeof(buf),"%s",owned);
++ }
++
+ 	g = (r->h->family == FW3_FAMILY_V6) ? &xtg6 : &xtg;
+ 	g->opts = g->orig_opts;
+ 
+@@ -1704,10 +1633,23 @@
+ 	if (status > 0)
+ 	{
+ 		info("     ! Skipping due to previous exception (code %u)", status);
+-		goto free;
+-	}
+-
+-	set_rule_tag(r);
++		{ r->h->error = true; goto free; }
++	}
++
++ /* No comment match in the retained kernel. Hook ownership is structural. */
++ if (r->h->family == FW3_FAMILY_V6) {
++  for (i = 0; i + 1 < r->argc; i++) {
++   if (!strcmp(r->argv[i], "-j") && !strcmp(r->argv[i+1], "REJECT")) {
++    free(r->argv[i+1]); r->argv[i+1] = fw3_strdup("DROP");
++   }
++   if (!strcmp(r->argv[i], "--reject-with")) {
++    free(r->argv[i]); free(r->argv[i+1]);
++    memmove(r->argv+i, r->argv+i+2, (r->argc-i-2)*sizeof(*r->argv));
++    r->argc -= 2; i--;
++   }
++  }
++ }
++
+ 
+ 	while ((optc = getopt_long(r->argc, r->argv, "-:m:j:i:o:s:d:", g->opts,
+ 	                           NULL)) != -1)
+@@ -1720,7 +1662,7 @@
+ 			if (!em)
+ 			{
+ 				warn("fw3_ipt_rule_append(): Can't find match '%s'", optarg);
+-				goto free;
++				{ r->h->error = true; goto free; }
+ 			}
+ 
+ 			init_match(r, em, true);
+@@ -1732,7 +1674,7 @@
+ 			if (!et)
+ 			{
+ 				warn("fw3_ipt_rule_append(): Can't find target '%s'", optarg);
+-				goto free;
++				{ r->h->error = true; goto free; }
+ 			}
+ 
+ 			break;
+@@ -1743,7 +1685,7 @@
+ 			    dev.any || dev.invert || *dev.network)
+ 			{
+ 				warn("fw3_ipt_rule_append(): Bad argument '%s'", optarg);
+-				goto free;
++				{ r->h->error = true; goto free; }
+ 			}
+ 
+ 			dev.invert = inv;
+@@ -1757,7 +1699,7 @@
+ 			    addr.range || addr.invert)
+ 			{
+ 				warn("fw3_ipt_rule_append(): Bad argument '%s'", optarg);
+-				goto free;
++				{ r->h->error = true; goto free; }
+ 			}
+ 
+ 			addr.invert = inv;
+@@ -1774,7 +1716,7 @@
+ 			}
+ 
+ 			warn("fw3_ipt_rule_append(): Bad argument '%s'", optarg);
+-			goto free;
++			{ r->h->error = true; goto free; }
+ 
+ 		default:
+ 			if (parse_option(r, optc, inv))
+@@ -1810,8 +1752,10 @@
+ 		if (fw3_pr_debug)
+ 			rule_print(r, "-A", buf);
+ 
+-		if (!ip6tc_append_entry(buf, rule, r->h->handle))
++		if (!ip6tc_append_entry(buf, rule, r->h->handle)) {
++			r->h->error = true;
+ 			warn("ip6tc_append_entry(): %s", ip6tc_strerror(errno));
++		}
+ 	}
+ 	else
+ #endif
+@@ -1830,8 +1774,10 @@
+ 		if (fw3_pr_debug)
+ 			rule_print(r, "-A", buf);
+ 
+-		if (!iptc_append_entry(buf, rule, r->h->handle))
++		if (!iptc_append_entry(buf, rule, r->h->handle)) {
++			r->h->error = true;
+ 			warn("iptc_append_entry(): %s\n", iptc_strerror(errno));
++		}
+ 	}
+ 
+ 	free(rule);
+--- a/iptables.h
++++ b/iptables.h
+@@ -38,6 +38,7 @@
+ 	enum fw3_family family;
+ 	enum fw3_table table;
+ 	void *handle;
++	bool error;
+ };
+ 
+ struct fw3_ipt_rule;
+@@ -62,7 +63,7 @@
+ 
+ void fw3_ipt_gc(struct fw3_ipt_handle *h);
+ 
+-void fw3_ipt_commit(struct fw3_ipt_handle *h);
++bool fw3_ipt_commit(struct fw3_ipt_handle *h);
+ 
+ void fw3_ipt_close(struct fw3_ipt_handle *h);
+ 
+--- a/main.c
++++ b/main.c
+@@ -196,7 +196,11 @@
+ 		for (table = FW3_TABLE_FILTER; table <= FW3_TABLE_RAW; table++)
+ 		{
+ 			if (!(handle = fw3_ipt_open(family, table)))
++			{
++				if (table == FW3_TABLE_FILTER)
++					return 1;
+ 				continue;
++			}
+ 
+ 			info(" * %sing %s %s table", complete ? "Flush" : "Clear",
+ 			     fw3_flag_names[family], fw3_flag_names[table]);
+@@ -211,7 +215,11 @@
+ 				fw3_flush_zones(handle, run_state, false);
+ 			}
+ 
+-			fw3_ipt_commit(handle);
++			if (!fw3_ipt_commit(handle))
++			{
++				fw3_ipt_close(handle);
++				return 1;
++			}
+ 			fw3_ipt_close(handle);
+ 		}
+ 
+@@ -266,7 +274,11 @@
+ 		for (table = FW3_TABLE_FILTER; table <= FW3_TABLE_RAW; table++)
+ 		{
+ 			if (!(handle = fw3_ipt_open(family, table)))
++			{
++				if (table == FW3_TABLE_FILTER)
++					return 1;
+ 				continue;
++			}
+ 
+ 			info(" * Populating %s %s table",
+ 			     fw3_flag_names[family], fw3_flag_names[table]);
+@@ -281,8 +293,11 @@
+ 			fw3_print_zone_rules(handle, cfg_state, false);
+ 			fw3_print_default_tail_rules(handle, cfg_state, false);
+ 
+-			if (!print_family)
+-				fw3_ipt_commit(handle);
++			if (!print_family && !fw3_ipt_commit(handle))
++			{
++				fw3_ipt_close(handle);
++				return 1;
++			}
+ 
+ 			fw3_ipt_close(handle);
+ 		}
+@@ -334,14 +349,22 @@
+ 		for (table = FW3_TABLE_FILTER; table <= FW3_TABLE_RAW; table++)
+ 		{
+ 			if (!(handle = fw3_ipt_open(family, table)))
++			{
++				if (table == FW3_TABLE_FILTER)
++					return 1;
+ 				continue;
++			}
+ 
+ 			info(" * Clearing %s %s table",
+ 			     fw3_flag_names[family], fw3_flag_names[table]);
+ 
+ 			fw3_flush_rules(handle, run_state, true);
+ 			fw3_flush_zones(handle, run_state, true);
+-			fw3_ipt_commit(handle);
++			if (!fw3_ipt_commit(handle))
++			{
++				fw3_ipt_close(handle);
++				return 1;
++			}
+ 			fw3_ipt_close(handle);
+ 		}
+ 
+@@ -360,7 +383,11 @@
+ 		for (table = FW3_TABLE_FILTER; table <= FW3_TABLE_RAW; table++)
+ 		{
+ 			if (!(handle = fw3_ipt_open(family, table)))
++			{
++				if (table == FW3_TABLE_FILTER)
++					return 1;
+ 				continue;
++			}
+ 
+ 			info(" * Populating %s %s table",
+ 			     fw3_flag_names[family], fw3_flag_names[table]);
+@@ -375,7 +402,11 @@
+ 			fw3_print_zone_rules(handle, cfg_state, true);
+ 			fw3_print_default_tail_rules(handle, cfg_state, true);
+ 
+-			fw3_ipt_commit(handle);
++			if (!fw3_ipt_commit(handle))
++			{
++				fw3_ipt_close(handle);
++				return 1;
++			}
+ 			fw3_ipt_close(handle);
+ 		}
+ 
+@@ -415,10 +446,18 @@
+ 		for (table = FW3_TABLE_FILTER; table <= FW3_TABLE_RAW; table++)
+ 		{
+ 			if (!(handle = fw3_ipt_open(family, table)))
++			{
++				if (table == FW3_TABLE_FILTER)
++					return 1;
+ 				continue;
++			}
+ 
+ 			fw3_ipt_gc(handle);
+-			fw3_ipt_commit(handle);
++			if (!fw3_ipt_commit(handle))
++			{
++				fw3_ipt_close(handle);
++				return 1;
++			}
+ 			fw3_ipt_close(handle);
+ 		}
+ 	}

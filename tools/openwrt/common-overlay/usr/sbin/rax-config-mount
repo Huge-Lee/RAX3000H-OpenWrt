@@ -1,0 +1,70 @@
+#!/bin/sh
+# Direct JFFS2 configuration storage; the root filesystem stays in RAM.
+set -eu
+
+grep -q '^hi_flash ' /proc/modules || insmod /lib/rax3000h/hi_flash.ko
+partition=$(sed -n 's/^\(mtd[0-9]*\):.*"plugins"$/\1/p' /proc/mtd)
+[ -n "$partition" ]
+mkdir -p /plugins
+# The MTD name works before procd has created /dev/mtdblock* nodes.
+grep -q ' /plugins jffs2 ' /proc/mounts || mount -t jffs2 -o noatime,nodev,nosuid mtd:plugins /plugins
+
+store=/plugins/openwrt
+mkdir -p "$store"
+[ ! -x /usr/sbin/rax-config ] || /usr/sbin/rax-config apply-pending
+# passwd/group must remain readable after daemons drop privileges.
+# Protect secrets at their normal file/directory locations instead.
+chmod 755 "$store"
+
+# Publish each initial directory by rename only after its contents are ready.
+# Keep uci-defaults deletions too, so RAM boots do not reapply first-boot defaults.
+for name in config dropbear uci-defaults crontabs; do
+	if [ ! -d "$store/$name" ]; then
+		mkdir -p "$store/.$name.new"
+		[ ! -d "/etc/$name" ] || cp -a "/etc/$name/." "$store/.$name.new/"
+		mv "$store/.$name.new" "$store/$name"
+	fi
+	mkdir -p "/etc/$name"
+	mount -o bind "$store/$name" "/etc/$name"
+done
+chmod 700 /etc/dropbear
+
+mkdir -p "$store/accounts"
+chmod 755 "$store/accounts"
+for name in passwd group shadow; do
+	if [ ! -f "$store/accounts/$name" ]; then
+		cp -p "/etc/$name" "$store/accounts/.$name.new"
+		mv "$store/accounts/.$name.new" "$store/accounts/$name"
+	fi
+	# BusyBox passwd follows symlinks before replacing the file by rename.
+	ln -sf "$store/accounts/$name" "/etc/$name"
+done
+chmod 600 "$store/accounts/shadow"
+
+# rpcd writes rc.local through the link, like the account files above.
+if [ ! -f "$store/rc.local" ]; then
+	cp -p /etc/rc.local "$store/.rc.local.new"
+	mv "$store/.rc.local.new" "$store/rc.local"
+fi
+ln -sf "$store/rc.local" /etc/rc.local
+
+# Keep the standard backup selection file across firmware updates too.
+if [ ! -f "$store/sysupgrade.conf" ]; then
+	[ -f /etc/sysupgrade.conf ] || touch /etc/sysupgrade.conf
+	cp -p /etc/sysupgrade.conf "$store/sysupgrade.conf"
+fi
+ln -sf "$store/sysupgrade.conf" /etc/sysupgrade.conf
+
+# Seed is updated by atomic rename, so use the upstream configurable path
+# inside persistent storage rather than a symlink to /etc/urandom.seed.
+seed=$(uci -q get 'system.@system[0].urandom_seed' || true)
+case "$seed" in ''|0) uci set "system.@system[0].urandom_seed=$store/urandom.seed"; uci commit system;; esac
+if ! uci -q get system.led_control >/dev/null; then
+	uci set system.led_control=led-control
+	uci set system.led_control.mode=default
+	uci commit system
+fi
+/usr/sbin/rax-ipv6-migrate
+/usr/sbin/rax-service-state restore
+sync
+echo RAX_CONFIG_READY >/dev/console

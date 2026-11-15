@@ -1,0 +1,116 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Only rootfs is writable here. Slot selection updates redundant U-Boot env.
+set -eu
+die() { echo "$*" >&2; exit 1; }
+slot() { case "$1" in a|b) ;; *) die 'Slot must be a or b';; esac; }
+part() {
+    sed -n "s/^\(mtd[0-9]*\):.*\"$1\"$/\1/p" /proc/mtd
+}
+layout() {
+    for entry in 'kernela 00800000' 'kernelb 00800000' 'rootfsa 01d00000' 'rootfsb 01d00000' 'plugins 01100000' 'enva 00040000' 'envb 00040000'; do
+        set -- $entry
+        grep -q ": $2 00020000 \"$1\"$" /proc/mtd || die "Unexpected partition layout: $1"
+    done
+}
+running() {
+    if awk '$2=="/" && $3=="squashfs" {found=1} END {exit !found}' /proc/mounts; then
+        device=$(awk '$2=="/" {print $1}' /proc/mounts)
+        index=${device#/dev/ubiblock}; index=${index%_*}
+        case "$index" in ''|*[!0-9]*) die 'Unknown SquashFS root device';; esac
+        num=$(cat "/sys/class/ubi/ubi$index/mtd_num")
+        case "mtd$num" in "$(part rootfsa)") echo a; return;; "$(part rootfsb)") echo b; return;; esac
+        die 'Cannot identify running flash slot'
+    fi
+    echo ram
+}
+kernel_check() {
+    slot "$1"; layout
+    device="/dev/$(part "kernel$1")"
+    set -- $(hexdump -s 12 -n 4 -e '4/1 "%u "' "$device")
+    length=$(($1*16777216+$2*65536+$3*256+$4))
+    [ "$length" -gt 1048576 ] && [ "$length" -lt 8388544 ] || die 'Invalid kernel image length'
+    digest=$(dd if="$device" bs=64 skip=1 2>/dev/null | head -c "$length" | sha256sum | cut -d' ' -f1)
+    # Hash the uImage payload, excluding mutable header and partition padding.
+    case "$digest" in
+        ba88915ae45b71718be111424589ebce26cdfdef8d28cb8154df3ac8e19e1b86) echo "KERNEL_OK $digest";;
+        *) [ "${force:-0}" = 1 ] || die "Unverified target kernel $digest; explicit --force is required"
+           echo "KERNEL_FORCED $digest";;
+    esac
+}
+space_check() {
+    free=$(df -Pk /plugins | tail -n 1 | awk '{print $4}')
+    [ "$free" -ge 1024 ] || die "plugins has ${free} KiB free; at least 1024 KiB required"
+}
+assets_check() {
+    base=/plugins/openwrt/vendor
+    [ -s "$base/lib/hisilicon/ko/hi_flash.ko" ] || die 'Missing device assets'
+    while read -r group path; do
+        case "$group" in wired|wifi) [ -s "$base/$path" ] || die "Missing $path";; esac
+    done < /usr/share/rax3000h/vendor-modules.list
+    while read -r path; do
+        case "$path" in ''|'#'*|usr/local/factory/*) continue;; esac
+        [ -e "$base/$path" ] || die "Missing $path"
+    done < /usr/share/rax3000h/vendor-files.list
+}
+select_slot() {
+    slot "$1"; layout
+    mkdir -p /var/lock
+    # Never write the bootcmd, IP settings or bootloader program.
+    fw_setenv -c /etc/fw_env.config bootflag "$1"
+    case "$1" in a) echo 0x10 > /sys/devices/platform/sysenv/boot_reg;; b) echo 0x11 > /sys/devices/platform/sysenv/boot_reg;; esac
+    sync
+    echo "SLOT_SELECTED $1"
+}
+action=${1:-status}; shift || true
+case "$action" in
+    status)
+        printf 'running=%s\nselected=%s\n' "$(running)" "$(fw_printenv -c /etc/fw_env.config -n bootflag)"
+        ;;
+    check-kernel)
+        target=${1:?slot required}; force=0; [ "${2:-}" != --force ] || force=1
+        kernel_check "$target"
+        ;;
+    select)
+        target=${1:?slot required}; force=0; [ "${2:-}" != --force ] || force=1
+        kernel_check "$target"; select_slot "$target"
+        ;;
+    mark-boot)
+        target=$(running)
+        case "$target" in
+            a|b)
+                assets_check
+                [ "$(fw_printenv -c /etc/fw_env.config -n bootflag)" = "$target" ] || die 'Boot slot disagrees with environment'
+                case "$target" in a) echo 0x10 > /sys/devices/platform/sysenv/boot_reg;; b) echo 0x11 > /sys/devices/platform/sysenv/boot_reg;; esac
+                echo "BOOT_CONFIRMED $target";;
+        esac
+        ;;
+    write)
+        target=${1:?slot required}; image=${2:?image required}; force=0
+        [ "${3:-}" != --force ] || force=1
+        slot "$target"; layout
+        mkdir /tmp/rax-flash.lock || die 'A flash operation is already running'
+        trap 'rmdir /tmp/rax-flash.lock' EXIT
+        [ "$(running)" != "$target" ] || die 'Refusing to overwrite the running rootfs'
+        rax-image-check "$image"
+        kernel_check "$target"
+        assets_check
+        space_check
+        mtd=$(part "rootfs$target"); num=${mtd#mtd}
+        # Inactive devices must be detached, never erase a mounted volume.
+        for u in /sys/class/ubi/ubi[0-9]*; do
+            [ -f "$u/mtd_num" ] || continue
+            [ "$(cat "$u/mtd_num")" = "$num" ] || continue
+            idx=${u##*ubi}
+            ! grep -qE "(/dev/ubi${idx}[_:]|/dev/ubiblock${idx}_)" /proc/mounts || die 'Target volume is mounted'
+            ubiblock -r "/dev/ubi${idx}_0" 2>/dev/null || true
+            ubiblock -r "/dev/ubi${idx}_1" 2>/dev/null || true
+            ubidetach /dev/ubi_ctrl -m "$num"
+        done
+        echo "WRITING rootfs$target"
+        ubiformat "/dev/$mtd" -q -y -f "$image"
+        sync
+        echo "ROOTFS_WRITTEN $target"
+        ;;
+    *) die 'Usage: rax-flash status|check-kernel SLOT [--force]|write SLOT IMAGE [--force]|select SLOT [--force]|mark-boot';;
+esac

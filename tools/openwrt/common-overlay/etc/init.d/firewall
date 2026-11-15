@@ -1,0 +1,40 @@
+#!/bin/sh /etc/rc.common
+START=19
+USE_PROCD=1
+
+service_triggers() {
+	procd_add_reload_trigger firewall
+}
+
+start_service() {
+	# Keep local management reachable even if configuration or fw3 fails.
+	# Install this before DROP, and keep it until both families have committed.
+	for tool in iptables ip6tables; do
+		"$tool" -w -N rax_bootstrap 2>/dev/null || "$tool" -w -F rax_bootstrap || return 1
+		"$tool" -w -A rax_bootstrap -i lo -j ACCEPT || return 1
+		"$tool" -w -A rax_bootstrap -i br-lan -j ACCEPT || return 1
+		"$tool" -w -C INPUT -j rax_bootstrap 2>/dev/null || "$tool" -w -I INPUT 1 -j rax_bootstrap || return 1
+		"$tool" -w -P INPUT DROP || return 1
+		"$tool" -w -P FORWARD DROP || return 1
+	done
+	fw3 start || return $?
+	for tool in iptables ip6tables; do
+		"$tool" -w -D INPUT -j rax_bootstrap || return 1
+		"$tool" -w -F rax_bootstrap
+		"$tool" -w -X rax_bootstrap
+	done
+	touch /var/run/rax-firewall-ready
+	echo 0 >/proc/sys/net/ipv6/conf/eth0/disable_ipv6
+}
+
+reload_service() {
+	fw3 reload
+}
+
+restart() {
+	fw3 reload
+}
+
+stop_service() {
+	fw3 stop
+}

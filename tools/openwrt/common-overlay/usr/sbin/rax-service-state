@@ -1,0 +1,27 @@
+#!/bin/sh
+# Persist user choices, not an old firmware's entire rc.d directory.
+set -eu
+store=/plugins/openwrt/services
+case "${1:-}" in
+    save)
+        name=${2:?service required}; state=${3:?state required}
+        case "$name" in ''|*[!a-zA-Z0-9_-]*) exit 2;; esac
+        case "$state" in 0|1) ;; *) exit 2;; esac
+        mkdir -p "$store"
+        printf '%s\n' "$state" >"$store/.$name.$$"
+        mv "$store/.$name.$$" "$store/$name"
+        ;;
+    restore)
+        for entry in "$store"/*; do
+            [ -f "$entry" ] || continue
+            name=${entry##*/}
+            case "$name" in ''|*[!a-zA-Z0-9_-]*) continue;; esac
+            [ -x "/etc/init.d/$name" ] || continue
+            case "$(cat "$entry")" in
+                0) RAX_SERVICE_RESTORE=1 "/etc/init.d/$name" disable;;
+                1) RAX_SERVICE_RESTORE=1 "/etc/init.d/$name" enable;;
+            esac
+        done
+        ;;
+    *) exit 2;;
+esac

@@ -1,0 +1,55 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# The device's own built-in initramfs supplies its matching platform modules.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t tmpfs -o mode=755 tmpfs /dev
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+mkdir -p /dev/pts /var/run /var/lock
+mknod /dev/console c 5 1
+mknod /dev/null c 1 3
+mknod /dev/zero c 1 5
+mknod /dev/random c 1 8
+mknod /dev/urandom c 1 9
+mknod /dev/watchdog c 10 130
+rax-devnodes
+exec </dev/console >/dev/console 2>&1
+fail() { echo "RAX_INSTALLER_FAILED: $*"; while true; do /bin/sh; done; }
+for module in hi_crg ksecurec hi_basic hi_clk hi_kreset hi_sysctrl hi_acp hi_wdg; do
+    path=/lib/hisilicon/ko/$module.ko
+    [ ! -f "$path" ] || insmod "$path" || fail "$module"
+done
+path=/lib/modules/$(uname -r)/dw_wdt.ko
+[ ! -f "$path" ] || insmod "$path" || fail watchdog
+rax-devnodes
+# Keep the descriptor open in PID 1; a child feeds it during long transfers.
+exec 3>/dev/watchdog
+(while true; do printf X >&3; sleep 5; done) &
+insmod /lib/hisilicon/ko/hi_flash.ko || fail flash
+insmod /lib/hisilicon/ko/hi_ksysenv.ko || fail sysenv
+rax-devnodes
+force=
+grep -q 'rax_force=1' /proc/cmdline && force=--force
+rax-flash check-kernel a $force || fail 'kernel whitelist'
+insmod /lib/modules/$(uname -r)/ubi.ko || fail ubi
+mount -t jffs2 -o ro,nodev,nosuid mtd:plugins /plugins || fail plugins
+mount -t jffs2 -o ro,nodev,nosuid mtd:fac /usr/local/factory || fail factory
+if [ -s /plugins/openwrt/vendor/bin/hostapd ]; then
+    mkdir -p /tmp/vendor
+    cp -a /plugins/openwrt/vendor/. /tmp/vendor/ || fail 'existing assets'
+else
+    rax-devnodes
+    ubiattach /dev/ubi_ctrl -m 13 || fail 'attach original rootfs'
+    rax-devnodes
+    ubiblock -c /dev/ubi0_0 || fail 'UBI block device'
+    rax-devnodes
+    mount -t squashfs -o ro /dev/ubiblock0_0 /stock || fail 'original rootfs'
+    /usr/sbin/rax-extract-assets /stock /tmp/vendor || fail 'extract device assets'
+fi
+# The network can operate after detaching the original rootfs for installation.
+cp -a /tmp/vendor/. /
+/usr/bin/rax-network wired || fail 'wired network'
+dropbearkey -t ed25519 -f /tmp/installer-host-key >/dev/null 2>&1 || fail 'SSH key'
+echo RAX_INSTALLER_LOCAL_READY
+while true; do /bin/sh; done

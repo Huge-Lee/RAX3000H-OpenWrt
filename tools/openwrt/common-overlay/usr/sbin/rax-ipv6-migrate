@@ -1,0 +1,57 @@
+#!/bin/sh
+# Upgrade persistent UCI once, without replacing addresses or user credentials.
+set -eu
+version=/plugins/openwrt/ipv6-version
+case "$(cat "$version" 2>/dev/null || true)" in
+	2) exit 0;;
+	1)
+		# The vendor kernel cannot install source-specific IPv6 routes.
+		uci set network.wan6.sourcefilter=0
+		uci commit network
+		printf '2\n' >"$version"
+		exit 0
+		;;
+esac
+
+[ -f /etc/config/firewall ] || cp /usr/share/rax3000h/firewall.default /etc/config/firewall
+if [ "$(uci -q get network.wan.ipv6 || true)" = 0 ]; then
+	uci delete network.wan.ipv6
+fi
+if ! uci -q get network.wan6 >/dev/null; then
+	uci set network.wan6=interface
+	uci set network.wan6.device=@wan
+	uci set network.wan6.proto=dhcpv6
+	uci set network.wan6.reqaddress=try
+	uci set network.wan6.reqprefix=auto
+fi
+uci set network.wan6.sourcefilter=0
+# The PPP adapter lets this explicit wan6 follow the PPP L3 device too.
+case "$(uci -q get network.wan.proto || true)" in
+	ppp|pppoe) uci set network.wan.ipv6=auto;;
+esac
+uci -q get network.lan.ip6assign >/dev/null || uci set network.lan.ip6assign=64
+if ! uci -q get 'network.@globals[0].ula_prefix' >/dev/null; then
+	uci -q get network.globals >/dev/null || uci set network.globals=globals
+	global_id=$(hexdump -n 5 -e '5/1 "%02x"' /dev/urandom)
+	# Format the 40 random bits into the three ULA hextets.
+	uci set "network.globals.ula_prefix=$(printf '%s' "fd$global_id" | sed 's/^\(....\)\(....\)\(....\)$/\1:\2:\3::\/48/')"
+fi
+for option in ra dhcpv6; do
+	uci -q get "dhcp.lan.$option" >/dev/null || uci set "dhcp.lan.$option=server"
+done
+uci -q get dhcp.lan.ra_slaac >/dev/null || uci set dhcp.lan.ra_slaac=1
+if ! uci -q get dhcp.lan.ra_flags >/dev/null; then
+	uci add_list dhcp.lan.ra_flags=managed-config
+	uci add_list dhcp.lan.ra_flags=other-config
+fi
+if ! uci -q get dhcp.odhcpd >/dev/null; then
+	uci set dhcp.odhcpd=odhcpd
+	uci set dhcp.odhcpd.maindhcp=0
+	uci set dhcp.odhcpd.leasefile=/tmp/hosts/odhcpd
+	uci set dhcp.odhcpd.leasetrigger=/usr/sbin/odhcpd-update
+	uci set dhcp.odhcpd.loglevel=4
+	uci set dhcp.odhcpd.piofolder=/tmp/odhcpd-piofolder
+fi
+uci commit network
+uci commit dhcp
+printf '2\n' >"$version"

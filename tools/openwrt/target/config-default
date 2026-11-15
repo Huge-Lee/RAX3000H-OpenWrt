@@ -1,0 +1,7 @@
+# Header-generation baseline only, not a configuration for the vendor kernel.
+CONFIG_ARM=y
+CONFIG_ARCH_MULTI_V7=y
+CONFIG_CPU_V7=y
+CONFIG_AEABI=y
+# CONFIG_VFP is not set
+# CONFIG_NEON is not set

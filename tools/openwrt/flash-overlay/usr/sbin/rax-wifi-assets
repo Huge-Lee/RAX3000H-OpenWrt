@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+wifi=/plugins/openwrt/vendor/lib/firmware/hi_wifi
+[ ! -e "$wifi/cfg_hi5622v100_hisi.ini" ] || exit 0
+# Also completes assets created by an earlier installer revision.
+if [ -f /usr/local/factory/luofu_cfg_hi5622v100_hisi.ini ]; then
+    cp /usr/local/factory/luofu_cfg_hi5622v100_hisi.ini "$wifi/cfg_hi5622v100_hisi.ini"
+else
+    set -- $(hexdump -n 4 -e '4/1 "%u "' /sys/firmware/devicetree/base/board_id)
+    board=$(($1*16777216+$2*65536+$3*256+$4))
+    cp "$wifi/cfg_hi5622v100_hisi_$board.ini" "$wifi/cfg_hi5622v100_hisi.ini"
+fi
+sync

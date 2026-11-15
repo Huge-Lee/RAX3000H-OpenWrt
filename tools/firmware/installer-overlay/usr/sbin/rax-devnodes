@@ -1,0 +1,10 @@
+#!/bin/sh
+for path in /sys/class/mtd/mtd*/dev /sys/class/ubi/*/dev /sys/class/misc/ubi_ctrl/dev /sys/class/watchdog/*/dev /sys/class/block/*/dev; do
+    [ -f "$path" ] || continue
+    device=${path%/dev}; device=${device##*/}
+    [ ! -e "/dev/$device" ] || continue
+    number=$(cat "$path"); major=${number%:*}; minor=${number#*:}
+    type=c
+    case "$path" in /sys/class/block/*) type=b;; esac
+    mknod "/dev/$device" "$type" "$major" "$minor"
+done

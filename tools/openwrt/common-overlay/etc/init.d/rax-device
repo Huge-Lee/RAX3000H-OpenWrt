@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+# Board initialization before netifd; wireless configuration is user-managed.
+START=18
+
+wireless_sae() {
+    local section="$1" device type encryption pwe
+    config_get device "$section" device
+    config_get type "$device" type
+    config_get encryption "$section" encryption
+    config_get pwe "$section" sae_pwe
+    case "$type:$encryption" in
+        rax3000h:sae|rax3000h:sae-mixed)
+            [ "$pwe" = 0 ] || uci set "wireless.$section.sae_pwe=0"
+        ;;
+    esac
+}
+
+start() {
+    [ -f /etc/config/wireless ] || cp /usr/share/rax3000h/wireless.default /etc/config/wireless
+    chmod 600 /etc/config/wireless
+    config_load wireless
+    config_foreach wireless_sae wifi-iface
+    [ -z "$(uci changes wireless)" ] || uci commit wireless
+    /usr/bin/rax-network wired-modules || return $?
+	echo RAX_WIRED_MODULES_READY >/dev/console
+}

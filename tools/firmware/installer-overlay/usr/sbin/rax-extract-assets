@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+source=$1; dest=$2
+mkdir -p "$dest"
+copy() {
+    mkdir -p "$dest/$(dirname "$1")"
+    cp -aL "$source/$1" "$dest/$1"
+}
+while read -r group path; do
+    case "$group" in wired|wifi) copy "$path";; esac
+done < /usr/share/rax3000h/vendor-modules.list
+while read -r path; do
+    case "$path" in ''|'#'*|usr/local/factory/*) continue;; esac
+    copy "${path%/}"
+done < /usr/share/rax3000h/vendor-files.list
+# Match the stock per-board Wi-Fi selection before this becomes immutable
+# device-local assets. Never use another board's RF configuration.
+wifi="$dest/lib/firmware/hi_wifi"
+if [ -f /usr/local/factory/luofu_cfg_hi5622v100_hisi.ini ]; then
+    cp /usr/local/factory/luofu_cfg_hi5622v100_hisi.ini "$wifi/cfg_hi5622v100_hisi.ini"
+else
+    set -- $(hexdump -n 4 -e '4/1 "%u "' /sys/firmware/devicetree/base/board_id)
+    board=$(($1*16777216+$2*65536+$3*256+$4))
+    cp "$wifi/cfg_hi5622v100_hisi_$board.ini" "$wifi/cfg_hi5622v100_hisi.ini"
+fi
+# Needed during installed preinit and Linux-side slot selection.
+for module in hi_flash hi_ksysenv; do
+    mkdir -p "$dest/lib/hisilicon/ko"
+    cp "/lib/hisilicon/ko/$module.ko" "$dest/lib/hisilicon/ko/"
+done

@@ -1,0 +1,9 @@
+#!/bin/sh /etc/rc.common
+START=96
+boot() {
+    /usr/sbin/rax-flash mark-boot || {
+        echo RAX_FLASH_BOOT_FAILED >/dev/console
+        return 1
+    }
+    echo RAX_FLASH_BOOT_READY >/dev/console
+}

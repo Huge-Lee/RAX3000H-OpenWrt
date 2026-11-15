@@ -1,0 +1,21 @@
+{
+  "openwrt": {
+    "url": "https://git.openwrt.org/openwrt/openwrt.git",
+    "tag": "v25.12.6",
+    "commit": "64900e756efa667774214f9c6b17c113222e01f7"
+  },
+  "feeds": {
+    "packages": {
+      "url": "https://git.openwrt.org/feed/packages.git",
+      "commit": "093d551675b1119a06ef224d419905e8d6b2af1a"
+    },
+    "luci": {
+      "url": "https://git.openwrt.org/project/luci.git",
+      "commit": "75a306df84a020c57a631ef5b4c02ace56d93387"
+    }
+  },
+  "iwinfo": {
+    "commit": "66bdd1a071895d91babc9b9228bb84626bbce226",
+    "abi": "20230701"
+  }
+}

@@ -1,0 +1,17 @@
+# Private runtime assets; directories ending in / include their contents.
+# Kernel modules are governed separately by vendor-modules.list.
+bin/hostapd
+bin/hostapd_cli
+bin/iwconfig
+bin/iwlist
+bin/iwpriv
+lib/firmware/hi_wifi/
+lib/firmware/lsw/
+usr/bin/hi5622v100_cal_init.sh
+usr/lib/libcrypto.so.1.1
+usr/lib/libnl-3.so.200
+usr/lib/libnl-genl-3.so.200
+usr/local/factory/hi5622v100.cal
+usr/local/factory/wifi_cal
+usr/local/factory/wifi_cali_data.kv
+usr/local/factory/wifi_cali_data_2g.kv

@@ -1,0 +1,45 @@
+diff --git a/package/network/services/ppp/Makefile b/package/network/services/ppp/Makefile
+index b3a81bf..f52d557 100644
+--- a/package/network/services/ppp/Makefile
++++ b/package/network/services/ppp/Makefile
+@@ -55,7 +55,7 @@ endef
+ 
+ define Package/ppp
+ $(call Package/ppp/Default)
+-  DEPENDS:= +USE_GLIBC:libcrypt-compat +kmod-ppp
++  DEPENDS:= +USE_GLIBC:libcrypt-compat +!TARGET_rax3000h:kmod-ppp
+   TITLE:=PPP daemon
+   VARIANT:=default
+ endef
+@@ -93,7 +93,7 @@ endef
+ 
+ define Package/ppp-mod-pppoe
+ $(call Package/ppp/Default)
+-  DEPENDS:=@(PACKAGE_ppp||PACKAGE_ppp-multilink) +kmod-pppoe
++  DEPENDS:=@(PACKAGE_ppp||PACKAGE_ppp-multilink) +!TARGET_rax3000h:kmod-pppoe
+   TITLE:=PPPoE plugin
+ endef
+ 
+diff --git a/package/network/services/ppp/files/ppp.sh b/package/network/services/ppp/files/ppp.sh
+index 79fc61f..f35e1a7 100755
+--- a/package/network/services/ppp/files/ppp.sh
++++ b/package/network/services/ppp/files/ppp.sh
+@@ -100,7 +100,8 @@ ppp_generic_setup() {
+ 		ipv6=""
+ 	elif [ -z "$ipv6" -o "$ipv6" = auto ]; then
+ 		ipv6=1
+-		autoipv6=1
++		# An explicit wan6 already follows the PPP L3 device.
++		[ "$(uci -q get "network.wan6.device")" = "@$config" ] || autoipv6=1
+ 	fi
+ 
+ 	if [ "$autoipv6" != 1 ]; then
+@@ -237,7 +238,7 @@ proto_pppoe_setup() {
+ 	local config="$1"
+ 	local iface="$2"
+ 
+-	/sbin/modprobe -qa slhc ppp_generic pppox pppoe
++	# PPP/PPPoE is built into the retained vendor kernel.
+ 
+ 	json_get_var mtu mtu
+ 	mtu="${mtu:-1492}"

@@ -1,0 +1,8 @@
+{
+  "admin/system/leds": {
+    "title": "LED Configuration",
+    "order": 60,
+    "action": { "type": "view", "path": "system/rax-led" },
+    "depends": { "acl": ["luci-mod-system-config"] }
+  }
+}

@@ -1,0 +1,7 @@
+rax_sysinfo() {
+	mkdir -p /tmp/sysinfo
+	echo RAX3000H > /tmp/sysinfo/model
+}
+
+boot_hook_add preinit_main rax_sysinfo
+boot_hook_add initramfs rax_sysinfo

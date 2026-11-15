@@ -1,0 +1,2 @@
+# Keep Linux scripts, patches and rootfs files usable across Windows and WSL.
+* text=auto eol=lf
